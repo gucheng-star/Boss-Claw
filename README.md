@@ -4,11 +4,13 @@
 
 **面向求职者的本地 AI 投递助手（Electron 桌面应用）— 独立运行，不占用你的浏览器，正常上网的同时自动投递简历**
 
+本仓库为 **gucheng-star 的个人 fork**，版本号独立维护。Windows 构建下载见 [本 fork 的 Releases](https://github.com/gucheng-star/Boss-Claw/releases/latest)；上游项目见 [YanQuan-dozzy/Boss-Claw](https://github.com/YanQuan-dozzy/Boss-Claw)。
+
 从简历解析、职业画像和岗位方向选择，到岗位信息整理、AI 匹配排序、沟通草稿生成与投递进度管理，全部集中在一个本地桌面应用中完成。
 
 [快速开始](#快速开始) · [下载安装](#下载安装) · [核心功能](#核心功能) · [使用边界](#安全与使用边界) · [桌面版说明](desktop-app/README.md) · [Wiki](https://github.com/YanQuan-dozzy/Boss-Claw/wiki) · [Agent 接入](#外部-agent-接入可选控制桥--mcp--代答)
 
-![Version](https://img.shields.io/badge/version-v2.5.6-078A83)
+![Version](https://img.shields.io/badge/version-v2.5.7-078A83)
 ![Electron](https://img.shields.io/badge/Electron-%5E42-47848F)
 ![React](https://img.shields.io/badge/React-18-61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6)
@@ -22,12 +24,12 @@
 
 ## 下载安装
 
-打包产物发布在 [GitHub Releases](https://github.com/YanQuan-dozzy/Boss-Claw/releases/latest)，**开箱即用，下载即可运行**：
+本 fork 的 Windows 打包产物发布在 [GitHub Releases](https://github.com/gucheng-star/Boss-Claw/releases/latest)，安装版与便携版选择一种下载即可：
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 🪟 安装版（推荐） | [BossClaw-2.5.6-x64.exe](https://github.com/YanQuan-dozzy/Boss-Claw/releases/latest/download/BossClaw-2.5.6-x64.exe) | 标准 NSIS 安装包，可自定义安装目录、创建桌面/开始菜单快捷方式 |
-| 🪟 便携版 | [BossClaw-2.5.6-portable.exe](https://github.com/YanQuan-dozzy/Boss-Claw/releases/latest/download/BossClaw-2.5.6-portable.exe) | 绿色单文件，无需安装、解压即用 |
+| 🪟 安装版（推荐） | [BossClaw-2.5.7-x64.exe](https://github.com/gucheng-star/Boss-Claw/releases/latest/download/BossClaw-2.5.7-x64.exe) | 标准 NSIS 安装包，可自定义安装目录、创建桌面/开始菜单快捷方式 |
+| 🪟 便携版 | [BossClaw-2.5.7-portable.exe](https://github.com/gucheng-star/Boss-Claw/releases/latest/download/BossClaw-2.5.7-portable.exe) | 绿色单文件，无需安装、解压即用 |
 
 Linux（AppImage / deb / tar.gz）与 macOS（源码自构建档案）产物目前仍为 **v2.5.3**，见 [Releases](https://github.com/YanQuan-dozzy/Boss-Claw/releases) 对应版本页；也可从源码自行打包（`npm run package:linux` / `package:mac`，macOS 的 dmg 只能在 macOS 上构建）。
 

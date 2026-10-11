@@ -1,12 +1,9 @@
-name: Build Windows packages (personal fork)
+name: Build and release Windows packages (personal fork)
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - desktop-app/**
-      - .github/workflows/windows-build.yml
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -20,6 +17,8 @@ jobs:
     if: github.repository == 'gucheng-star/Boss-Claw'
     runs-on: windows-2022
     timeout-minutes: 35
+    outputs:
+      app-version: ${{ steps.record.outputs.app-version }}
     defaults:
       run:
         shell: pwsh
@@ -45,6 +44,13 @@ jobs:
           npm ci --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check version tag
+        run: |
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($package.version)") {
+            throw 'Release tag must match package.json version'
+          }
+
       - name: Prepare verified Windows icon tool
         run: |
           $iconTool = Join-Path $env:RUNNER_TEMP 'rcedit-x64.exe'
@@ -65,6 +71,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Write-Host "Passed $($checks.Count) regression scripts"
+          "REGRESSION_SCRIPT_COUNT=$($checks.Count)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Typecheck and build renderer
         run: |
@@ -77,6 +84,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify packaged source and record provenance
+        id: record
         run: |
           $appRoot = 'release/win-unpacked/resources/app'
           $packagedServer = Join-Path $appRoot 'camoufox/camoufox_server.py'
@@ -110,9 +118,14 @@ jobs:
             executable_version = $exeInfo.FileVersion
             camoufox_source_sha256 = (Get-FileHash -LiteralPath $packagedServer -Algorithm SHA256).Hash.ToLowerInvariant()
             code_signed = $false
+            regression_scripts = [int]$env:REGRESSION_SCRIPT_COUNT
             artifacts = $artifacts
           }
           $info | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath 'release/BUILD-INFO.json' -Encoding utf8
+          "app-version=$($package.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          foreach ($artifact in $artifacts) {
+            Write-Host "$($artifact.file): $($artifact.bytes) bytes ($([math]::Round($artifact.bytes / 1MB, 2)) MiB)"
+          }
           $artifacts | ForEach-Object { "$($_.sha256)  $($_.file)" } |
             Set-Content -LiteralPath 'release/SHA256SUMS.txt' -Encoding utf8
           @'
@@ -131,9 +144,80 @@ jobs:
           name: BossClaw-windows-x64-${{ github.run_number }}-${{ github.sha }}
           path: |
             desktop-app/release/*.exe
+            desktop-app/release/*.exe.blockmap
             desktop-app/release/BUILD-INFO.json
             desktop-app/release/SHA256SUMS.txt
             desktop-app/release/BUILD-NOTES.txt
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  release:
+    if: github.repository == 'gucheng-star/Boss-Claw' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      APP_VERSION: ${{ needs.build.outputs.app-version }}
+    steps:
+      - name: Download verified packages
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: BossClaw-windows-x64-${{ github.run_number }}-${{ github.sha }}
+          path: release
+
+      - name: Verify checksums and write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum --check SHA256SUMS.txt)
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          info = json.loads(Path('release/BUILD-INFO.json').read_text(encoding='utf-8-sig'))
+          if info['source_commit'] != os.environ['GITHUB_SHA']:
+              raise SystemExit('Artifact source commit mismatch')
+          if info['app_version'] != os.environ['APP_VERSION']:
+              raise SystemExit('Artifact version mismatch')
+          rows = '\n'.join(
+              f"| `{item['file']}` | {item['bytes'] / 1024**2:.2f} MiB |"
+              for item in info['artifacts']
+          )
+          notes = f"""这是 **gucheng-star/Boss-Claw 的个人 fork 构建**，版本号由本 fork 独立维护。
+
+          基于上游 `cbca44a10846dbdf7b95e5d76e4ef937b1b28b52`，包含已合并的 [Issue #4 修复](https://github.com/YanQuan-dozzy/Boss-Claw/pull/5) 和随后提交的安全节奏界面调整。
+
+          修复聊天输入识别与会话身份归属，保留目标身份检查和发送确认。同步依赖锁文件，并增加本 fork 的 Windows 构建与发行流程。
+
+          | 下载文件 | 大小 |
+          | --- | ---: |
+          {rows}
+
+          安装版和便携版选择一种即可，无需同时下载。校验值见 `SHA256SUMS.txt`，完整构建信息见 `BUILD-INFO.json`。
+
+          验证：{info['regression_scripts']} 个现有静态回归脚本、`npm run verify`、Windows x64 打包、应用版本及随包 Camoufox 源码一致性、发行前 SHA-256 校验均通过。
+
+          [源码提交]({info['source_url']}) · [构建记录]({info['workflow_run']})
+
+          本构建未签名；Python 环境、浏览器内核和用户数据不包含在安装包中。尚未安装本发行版或验证真实登录、投递。本次修复、构建和发行配置使用了 AI 辅助开发。
+          """
+          # Remove YAML block indentation from prose without altering table rows.
+          notes = '\n'.join(line.lstrip() for line in notes.splitlines()).strip() + '\n'
+          Path(os.environ['RUNNER_TEMP'], 'release-notes.md').write_text(notes, encoding='utf-8')
+          PY
+
+      - name: Publish personal fork release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "BossClaw $APP_VERSION（个人 fork 构建）" --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            release/*.exe release/*.exe.blockmap release/BUILD-INFO.json release/SHA256SUMS.txt release/BUILD-NOTES.txt
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
