@@ -1,0 +1,139 @@
+name: Build Windows packages (personal fork)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - desktop-app/**
+      - .github/workflows/windows-build.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'gucheng-star/Boss-Claw'
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop-app
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      BOSSCLAW_REQUIRE_ICON: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop-app/package-lock.json
+
+      - name: Install locked dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare verified Windows icon tool
+        run: |
+          $iconTool = Join-Path $env:RUNNER_TEMP 'rcedit-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe' -OutFile $iconTool
+          $expected = '3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a'
+          if ((Get-FileHash -LiteralPath $iconTool -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'rcedit checksum mismatch'
+          }
+          "RCEDIT_EXE=$iconTool" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run existing static regressions
+        run: |
+          $checks = @(Get-ChildItem -LiteralPath scripts -Filter '*-regression.mjs' -File | Sort-Object Name)
+          if ($checks.Count -eq 0) { throw 'No regression scripts found' }
+          foreach ($check in $checks) {
+            Write-Host "Running $($check.Name)"
+            node $check.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Write-Host "Passed $($checks.Count) regression scripts"
+
+      - name: Typecheck and build renderer
+        run: |
+          npm run verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Windows x64 installer and portable executable
+        run: |
+          npx --no-install electron-builder --win --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify packaged source and record provenance
+        run: |
+          $appRoot = 'release/win-unpacked/resources/app'
+          $packagedServer = Join-Path $appRoot 'camoufox/camoufox_server.py'
+          if ((Get-FileHash -LiteralPath 'camoufox/camoufox_server.py').Hash -ne
+              (Get-FileHash -LiteralPath $packagedServer).Hash) {
+            throw 'Packaged Camoufox server does not match the checked-out source'
+          }
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          $packedPackage = Get-Content -LiteralPath "$appRoot/package.json" -Raw | ConvertFrom-Json
+          if ($packedPackage.version -ne $package.version) { throw 'Packaged version mismatch' }
+          $exeInfo = (Get-Item -LiteralPath 'release/win-unpacked/BossClaw.exe').VersionInfo
+          if ($exeInfo.ProductName -ne 'BossClaw') { throw 'Executable metadata is missing' }
+          $outputs = @(Get-ChildItem -LiteralPath release -Filter '*.exe' -File | Sort-Object Name)
+          if ($outputs.Count -ne 2) { throw 'Expected an installer and a portable executable' }
+          $artifacts = @($outputs | ForEach-Object {
+            [ordered]@{
+              file = $_.Name
+              bytes = $_.Length
+              sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          })
+          $info = [ordered]@{
+            repository = $env:GITHUB_REPOSITORY
+            source_commit = $env:GITHUB_SHA
+            source_url = "https://github.com/$env:GITHUB_REPOSITORY/commit/$env:GITHUB_SHA"
+            workflow_run = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            built_at_utc = [DateTime]::UtcNow.ToString('o')
+            app_version = $package.version
+            electron_version = (Get-Content -LiteralPath 'node_modules/electron/package.json' -Raw | ConvertFrom-Json).version
+            executable_product = $exeInfo.ProductName
+            executable_version = $exeInfo.FileVersion
+            camoufox_source_sha256 = (Get-FileHash -LiteralPath $packagedServer -Algorithm SHA256).Hash.ToLowerInvariant()
+            code_signed = $false
+            artifacts = $artifacts
+          }
+          $info | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath 'release/BUILD-INFO.json' -Encoding utf8
+          $artifacts | ForEach-Object { "$($_.sha256)  $($_.file)" } |
+            Set-Content -LiteralPath 'release/SHA256SUMS.txt' -Encoding utf8
+          @'
+          These packages were built from the gucheng-star/Boss-Claw personal fork.
+          They are not an official upstream release and are not code-signed.
+          BUILD-INFO.json identifies the source commit and build run.
+          Python environments, browser kernels and user data are not bundled.
+          Packaging checks do not verify login or live message delivery.
+          '@ | Set-Content -LiteralPath 'release/BUILD-NOTES.txt' -Encoding utf8
+          "Built BossClaw $($package.version) from $env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "Installer and portable package checksums are included in the artifact." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: BossClaw-windows-x64-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            desktop-app/release/*.exe
+            desktop-app/release/BUILD-INFO.json
+            desktop-app/release/SHA256SUMS.txt
+            desktop-app/release/BUILD-NOTES.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
