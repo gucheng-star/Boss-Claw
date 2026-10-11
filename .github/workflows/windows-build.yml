@@ -51,6 +51,11 @@ jobs:
             throw 'Release tag must match package.json version'
           }
 
+      - name: Install Playwright Chromium for isolated regression
+        run: |
+          npx --no-install playwright-core install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified Windows icon tool
         run: |
           $iconTool = Join-Path $env:RUNNER_TEMP 'rcedit-x64.exe'
@@ -92,6 +97,13 @@ jobs:
               (Get-FileHash -LiteralPath $packagedServer).Hash) {
             throw 'Packaged Camoufox server does not match the checked-out source'
           }
+          $preloadSource = 'electron/preload/webview.cjs'
+          $packagedPreload = Join-Path $appRoot 'electron/preload/webview.cjs'
+          $preloadSourceHash = (Get-FileHash -LiteralPath $preloadSource -Algorithm SHA256).Hash.ToLowerInvariant()
+          $packagedPreloadHash = (Get-FileHash -LiteralPath $packagedPreload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($preloadSourceHash -ne $packagedPreloadHash) {
+            throw 'Packaged WebView preload does not match the checked-out source'
+          }
           $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
           $packedPackage = Get-Content -LiteralPath "$appRoot/package.json" -Raw | ConvertFrom-Json
           if ($packedPackage.version -ne $package.version) { throw 'Packaged version mismatch' }
@@ -117,6 +129,7 @@ jobs:
             executable_product = $exeInfo.ProductName
             executable_version = $exeInfo.FileVersion
             camoufox_source_sha256 = (Get-FileHash -LiteralPath $packagedServer -Algorithm SHA256).Hash.ToLowerInvariant()
+            webview_preload_source_sha256 = $preloadSourceHash
             code_signed = $false
             regression_scripts = [int]$env:REGRESSION_SCRIPT_COUNT
             artifacts = $artifacts
@@ -193,7 +206,7 @@ jobs:
 
           基于上游 `cbca44a10846dbdf7b95e5d76e4ef937b1b28b52`，包含已合并的 [Issue #4 修复](https://github.com/YanQuan-dozzy/Boss-Claw/pull/5) 和随后提交的安全节奏界面调整。
 
-          修复聊天输入识别与会话身份归属，保留目标身份检查和发送确认。同步依赖锁文件，并增加本 fork 的 Windows 构建与发行流程。
+          本版独立修复内嵌网页文字发送：限定当前聊天面板，排除图片等非文字控件，检查启用与可信点击回执，仅以新增完整己方气泡确认成功。请求派发回执新增 `accepted` / `sent`，避免将尚未确认的请求误认为发送成功。保留此前 Camoufox 修复、目标保护及安全节奏限制。
 
           | 下载文件 | 大小 |
           | --- | ---: |
@@ -201,7 +214,7 @@ jobs:
 
           安装版和便携版选择一种即可，无需同时下载。校验值见 `SHA256SUMS.txt`，完整构建信息见 `BUILD-INFO.json`。
 
-          验证：{info['regression_scripts']} 个现有静态回归脚本、`npm run verify`、Windows x64 打包、应用版本及随包 Camoufox 源码一致性、发行前 SHA-256 校验均通过。
+          验证：{info['regression_scripts']} 个回归脚本（含 Chromium 隔离回归）、`npm run verify`、Windows x64 打包、应用版本及随包 Camoufox / WebView preload 源码一致性、发行前 SHA-256 校验均通过。
 
           [源码提交]({info['source_url']}) · [构建记录]({info['workflow_run']})
 

@@ -31,7 +31,7 @@ import { useSettingsStore } from '@/store/useSettingsStore';
 import electronApi from '@/lib/electronApi';
 import { PLATFORM_META, PLATFORM_IDS, PLATFORM_CHIP_PALETTE, platformEnabled, resolvePlatform, type JobPlatform } from '@/lib/bossclaw/platforms';
 import { isWhitelistedUrl, whitelistSitesOf, WHITELIST_GROUPS, type BrowserSite as BrowserWhitelistSite } from '@/lib/bossclaw/browserWhitelist';
-import { registerBrowser, unregisterBrowser } from '@/lib/browserRegistry';
+import { registerBrowser, unregisterBrowser, type BrowserApplyOutcome } from '@/lib/browserRegistry';
 import CloakView from '@/components/CloakView';
 import BrowserNewTabPage, { type NewTabGroup } from '@/components/BrowserNewTabPage';
 
@@ -760,11 +760,10 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
   // ===== 向指定标签页发送 IPC 消息（按 tabId 真正派发）=====
   const sendInTab = useCallback((id: string, channel: string, ...args: any[]) => {
     const tabId = id || tabsRef.current.find((t) => t.kind === 'main')?.id || tabsRef.current[0]?.id;
-    if (!tabId) return;
+    if (!tabId) return false;
     const el = webviewEls.current[tabId];
-    if (el) {
-      try { el.send(channel, ...args); } catch {}
-    }
+    if (!el) return false;
+    try { el.send(channel, ...args); return true; } catch { return false; }
   }, []);
 
   const send = useCallback((channel: string, ...args: any[]) => {
@@ -1029,12 +1028,15 @@ function BrowserViewImpl({ defaultPlatform = 'boss', onNavigate, onJoinTask, onJ
     sendInTab(tabId || '', 'webview-command', { action: 'dom-dump' });
     return { ok: true, note: '已触发 DOM 诊断（结果见日志区）' };
   }, [sendInTab]);
-  const sendApply = useCallback((payload: Record<string, any> = {}) => {
+  const sendApply = useCallback((payload: Record<string, any> = {}): Promise<BrowserApplyOutcome> => {
     const id = activeIdRef.current || tabsRef.current[0]?.id || '';
-    if (!id) return Promise.resolve({ ok: false, reason: '无可用标签页' });
-    sendInTab(id, 'start-apply', payload);
+    if (!id) return Promise.resolve({ ok: false, accepted: false, sent: false, reason: '无可用标签页' });
+    if (!sendInTab(id, 'start-apply', payload)) {
+      return Promise.resolve({ ok: false, accepted: false, sent: false, reason: '当前标签页不可用，投递请求未派发' });
+    }
     // domApply 自带招呼语非空/外部网申跳过/气泡确认/风控即停；触发后结果经 apply-stage 回传。
-    return Promise.resolve({ ok: true, hint: '已触发自动投递（domApply），结果见 apply-stage/日志；首次成功会自动暂停验收' });
+    // Electron 的 send() 只确认请求已派发；真实发送结果仍以 preload verify_result 为准。
+    return Promise.resolve({ ok: true, accepted: true, sent: null, hint: '已派发自动投递请求，发送结果见 apply-stage/日志；首次成功会自动暂停验收' });
   }, [sendInTab]);
 
   // ===== 通用 UI 接管（ui-eval）：对 webview 页面执行白名单 DOM 操作（query/click/type/scroll）=====
