@@ -445,6 +445,25 @@ test('overlay covering text send after hover blocks trusted click', async () => 
   h.equal(result.ok, false, 'overlay blocks send'); h.equal(h.state.clicks.length, 0, 'overlay never clicked');
   h.equal(h.state.hovers.length, 1, 'overlay appeared during production hover');
 });
+test('overlay covering only button center uses an unobscured point within the same button', async () => {
+  const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft();
+  const rect = h.button().getBoundingClientRect(), cover = document.createElement('div');
+  Object.assign(cover.style, { position: 'fixed', left: rect.left + rect.width * 0.3 + 'px', top: rect.top + 'px',
+    width: rect.width * 0.4 + 'px', height: rect.height + 'px', zIndex: '9999', background: '#ddd' });
+  document.body.append(cover);
+  h.state.onClick = element => { h.equal(element, h.button(), 'same text button hit'); h.input().textContent = ''; h.append(h.greeting); };
+  const result = await h.send(ctx, h.greeting, before);
+  h.equal(result.ok, true, 'partly covered send confirmed'); h.equal(h.state.clicks.length, 1, 'only one click');
+  h.equal(cover.isConnected, true, 'overlay not removed');
+});
+test('partly clipped button with center outside viewport uses only the visible button portion', async () => {
+  const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft();
+  Object.assign(h.button().style, { position: 'fixed', left: innerWidth - 12 + 'px', top: '600px', width: '80px', margin: '0' });
+  h.state.onClick = element => { h.equal(element, h.button(), 'visible portion belongs to text button'); h.input().textContent = ''; h.append(h.greeting); };
+  const result = await h.send(ctx, h.greeting, before);
+  h.equal(result.ok, true, 'partly clipped send confirmed'); h.equal(h.state.clicks.length, 1, 'one clipped-button click');
+  h.assert(h.state.clicks[0].x < innerWidth && h.state.clicks[0].x > innerWidth - 12, 'click stays in visible intersection');
+});
 test('failed hover receipt blocks the final trusted click', async () => {
   const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft(); h.state.hoverOK = false;
   const result = await h.send(ctx, h.greeting, before);

@@ -134,7 +134,11 @@ try { evidence = JSON.parse(await readFile(join(output, 'results.json'), 'utf8')
 catch { throw new Error(`Electron exited ${exitCode} without results; inspect ${output}/stderr.txt. ${stderr.slice(-1600)}`); }
 assert.equal(exitCode, 0, `Electron failed: ${evidence.error || stderr.slice(-1600)}`);
 assert.ok(!evidence.error, evidence.error);
-assert.equal(evidence.results.length, 11, 'all actual native scenarios must finish');
+const expectedCases = ['focused-zoom1', 'unfocused-zoom1', 'unfocused-guest125', 'host125-guest1', 'guest125', 'host125-guest125',
+  'guest80', 'nested-svg125', 'scrolled-fixed125', 'guard-mutation125', 'click-without-bubble125',
+  'center-overlay125', 'partly-clipped125', 'fully-covered125', 'overlay-moves-after-hover125'];
+assert.deepEqual(evidence.expectedCases, expectedCases, 'fixture and assertions must agree on every scenario');
+assert.deepEqual(evidence.results.map(result => result.name), expectedCases, 'all actual native scenarios must finish once in order');
 assert.equal(evidence.nonLocalRequests.length, 0, 'fixture must not request network content');
 for (const result of evidence.results) {
   assert.ok(!result.error, `${result.name}: ${result.error}`);
@@ -146,7 +150,14 @@ for (const result of evidence.results) {
   const requests = evidence.requests.filter(request => request.name === result.name);
   if (!result.cfg.focus) assert.ok(requests.every(request => !request.windowFocused), `${result.name}: other window must actually own focus`);
   assert.equal(requests.filter(request => request.action === 'pressEnter').length, 0, `${result.name}: no Enter fallback/retry`);
-  if (result.cfg.guardFailure) {
+  if (result.cfg.overlay || result.cfg.clipped) assert.equal(result.geometry.centerWithinSend, false, `${result.name}: center must actually fail hit-testing`);
+  if (result.cfg.clipped) assert.equal(result.geometry.centerOutsideViewport, true, `${result.name}: original center must actually lie beyond the viewport`);
+  if (result.cfg.overlay === 'moving') {
+    assert.equal(result.geometry.changedOnNativeHover, true, `${result.name}: overlay must move during real hover`);
+    assert.equal(result.geometry.initialPointNowCovered, true, `${result.name}: original safe point must become covered before final click`);
+    assert.ok(clicks[0] && Math.abs(clicks[0].x - result.geometry.initialPoint.x) > 3, `${result.name}: final click must choose a fresh point`);
+  }
+  if (result.cfg.guardFailure || result.cfg.expectBlocked) {
     assert.equal(clicks.length, 0, `${result.name}: guard must prevent every click`);
     assert.equal(requests.filter(request => request.action === 'clickAt').length, 0, `${result.name}: no click IPC after guard failure`);
     assert.equal(result.result.clicked, false, `${result.name}: clicked must be false`);

@@ -1216,6 +1216,24 @@ function elementCenter(el) {
   } catch { return null; }
 }
 
+function visibleClickPoint(el) {
+  if (!el?.isConnected) return null;
+  const rect = el.getBoundingClientRect();
+  const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+  const right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom);
+  if (right - left < 4 || bottom - top < 4) return null;
+  // 小尺寸内嵌视口会裁切页面，固定浮层也可能仅遮住按钮中心。
+  // 只在此按钮与视口的交集中找点，并逐点检查真实顶层命中；不点击浮层或相邻控件。
+  for (const fy of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+    for (const fx of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+      const x = Math.round(left + (right - left) * fx), y = Math.round(top + (bottom - top) * fy);
+      const hit = document.elementFromPoint(x, y);
+      if (hit === el || (hit && el.contains(hit))) return { x, y };
+    }
+  }
+  return null;
+}
+
 function observeTrustedClick(el) {
   let finish;
   let timer;
@@ -1239,7 +1257,7 @@ async function trustedClickElement(el, opts = {}) {
   if (!el) return false;
   try { el.scrollIntoView?.({ block: 'center', behavior: 'instant' }); } catch {}
   await jitterDelay(200);
-  const to = elementCenter(el);
+  const to = opts.guard ? visibleClickPoint(el) : elementCenter(el);
   opts.report?.('按钮坐标', Boolean(to));
   if (!to) return false;
   const from = lastCursor || { x: Math.max(0, to.x - 70 - Math.round(Math.random() * 40)), y: Math.max(0, to.y - 50 - Math.round(Math.random() * 30)) };
@@ -1255,7 +1273,7 @@ async function trustedClickElement(el, opts = {}) {
     const guarded = Boolean(opts.guard());
     opts.report?.('会话与草稿守卫', guarded);
     if (!guarded) return false;
-    const current = elementCenter(el);
+    const current = visibleClickPoint(el);
     const hit = current && document.elementFromPoint(current.x, current.y);
     const hitTarget = Boolean(current && (hit === el || el.contains(hit)));
     opts.report?.('按钮命中', hitTarget);
@@ -2528,10 +2546,12 @@ function domDump() {
     const button = context && sendButton(input, { context, allowDisabled: true });
     const center = button && elementCenter(button);
     const hit = center && document.elementFromPoint(center.x, center.y);
+    const clickPoint = button && visibleClickPoint(button);
     notify('apply-stage', { stage: 'log', message: '文字发送只读检查：' + JSON.stringify({
       input: Boolean(input), panel: Boolean(context), session: Boolean(context && currentChatSendInput(context)),
       button: Boolean(button), enabled: Boolean(button && !isDisabledish(button)),
       hit: Boolean(button && hit && (hit === button || button.contains(hit))),
+      clickablePoint: Boolean(clickPoint),
       zoom: webFrame.getZoomFactor(), focus: document.hasFocus(),
       ownMessages: context ? ownMessageEntries(context).length : 0,
     }) });

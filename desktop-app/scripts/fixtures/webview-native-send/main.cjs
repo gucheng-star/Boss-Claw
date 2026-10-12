@@ -61,7 +61,12 @@ app.whenReady().then(async () => {
     { name: 'scrolled-fixed125', focus: true, guestZoom: 1.25, layout: 'fixed', nested: true },
     { name: 'guard-mutation125', focus: true, guestZoom: 1.25, guardFailure: true },
     { name: 'click-without-bubble125', focus: true, guestZoom: 1.25, noBubble: true },
+    { name: 'center-overlay125', focus: true, guestZoom: 1.25, overlay: 'center' },
+    { name: 'partly-clipped125', focus: true, guestZoom: 1.25, clipped: true },
+    { name: 'fully-covered125', focus: true, guestZoom: 1.25, overlay: 'full', expectBlocked: true },
+    { name: 'overlay-moves-after-hover125', focus: true, guestZoom: 1.25, overlay: 'moving' },
   ];
+  evidence.expectedCases = cases.map(cfg => cfg.name);
   for (const cfg of cases) {
     activeConfig = cfg; inputWindows.clear();
     host.webContents.setZoomFactor(cfg.hostZoom || 1); guest.setZoomFactor(cfg.guestZoom || 1);
