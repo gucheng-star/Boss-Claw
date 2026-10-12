@@ -104,6 +104,10 @@ jobs:
           if ($preloadSourceHash -ne $packagedPreloadHash) {
             throw 'Packaged WebView preload does not match the checked-out source'
           }
+          $mainSourceHash = (Get-FileHash -LiteralPath 'electron/main.cjs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($mainSourceHash -ne (Get-FileHash -LiteralPath (Join-Path $appRoot 'electron/main.cjs') -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw 'Packaged Electron main process does not match the checked-out source'
+          }
           $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
           $packedPackage = Get-Content -LiteralPath "$appRoot/package.json" -Raw | ConvertFrom-Json
           if ($packedPackage.version -ne $package.version) { throw 'Packaged version mismatch' }
@@ -130,6 +134,7 @@ jobs:
             executable_version = $exeInfo.FileVersion
             camoufox_source_sha256 = (Get-FileHash -LiteralPath $packagedServer -Algorithm SHA256).Hash.ToLowerInvariant()
             webview_preload_source_sha256 = $preloadSourceHash
+            electron_main_source_sha256 = $mainSourceHash
             code_signed = $false
             regression_scripts = [int]$env:REGRESSION_SCRIPT_COUNT
             artifacts = $artifacts
@@ -206,7 +211,7 @@ jobs:
 
           基于上游 `cbca44a10846dbdf7b95e5d76e4ef937b1b28b52`，包含已合并的 [Issue #4 修复](https://github.com/YanQuan-dozzy/Boss-Claw/pull/5) 和随后提交的安全节奏界面调整。
 
-          本版独立修复内嵌网页文字发送：限定当前聊天面板，排除图片等非文字控件，检查启用与可信点击回执，仅以新增完整己方气泡确认成功。请求派发回执新增 `accepted` / `sent`，避免将尚未确认的请求误认为发送成功。保留此前 Camoufox 修复、目标保护及安全节奏限制。
+          本版继续修复 2.5.8 未通过真实验收的内嵌网页发送问题：隔离 Electron 实验复现网页缩放后鼠标坐标错误，点击落入编辑器却收到派发成功回执。按 guest 网页缩放换算原生鼠标坐标，同时检查目标按钮实际收到的可信 click；仅以新增完整己方气泡确认发送成功。补充脱敏分阶段回执、失败终态和真实页面只读诊断。保留当前会话范围、非文字控件排除、Camoufox 修复、身份保护和安全节奏；失败不重发。
 
           | 下载文件 | 大小 |
           | --- | ---: |
@@ -214,7 +219,7 @@ jobs:
 
           安装版和便携版选择一种即可，无需同时下载。校验值见 `SHA256SUMS.txt`，完整构建信息见 `BUILD-INFO.json`。
 
-          验证：{info['regression_scripts']} 个回归脚本（含 Chromium 隔离回归）、`npm run verify`、Windows x64 打包、应用版本及随包 Camoufox / WebView preload 源码一致性、发行前 SHA-256 校验均通过。
+          验证：{info['regression_scripts']} 个回归脚本（含 Chromium DOM 和真实 Electron 原生输入隔离回归）、`npm run verify`、Windows x64 打包、应用版本及随包 Camoufox / WebView preload / Electron main 源码一致性、发行前 SHA-256 校验均通过。隔离网页气泡属于离线测试证据，不代表真实 BOSS 发送。
 
           [源码提交]({info['source_url']}) · [构建记录]({info['workflow_run']})
 

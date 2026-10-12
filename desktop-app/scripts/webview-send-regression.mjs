@@ -1,5 +1,6 @@
 // Real Chromium DOM regressions of the production preload functions. No account,
-// Electron IPC, remote page, or real delivery is involved. Every request is intercepted.
+// Electron IPC, remote page, or real delivery is involved. Click receipts use Chromium
+// native mouse input; the input IPC and message response remain isolated fixture adapters.
 // Run: node scripts/webview-send-regression.mjs
 // Use BOSSCLAW_TEST_BROWSER for an existing Chromium binary; CI uses Playwright Chromium.
 import assert from 'node:assert/strict';
@@ -69,7 +70,7 @@ assert.ok(!/\brequire\s*\(/.test(production), 'extracted send helpers must not i
 const harness = `
 const state = window.__sendTest = {
   clicks: [], hovers: [], inputs: [], notifications: [], waits: [], synthetic: [],
-  clickOK: true, hoverOK: true, onClick: null, onPoll: null, beforeClick: null, onSettle: null, now: 100000,
+  clickOK: true, clickDelivered: true, clickWrongTarget: false, hoverOK: true, onClick: null, onPoll: null, beforeClick: null, onSettle: null, now: 100000,
 };
 Date.now = () => state.now;
 const sleep = async (ms) => {
@@ -117,7 +118,12 @@ async function trustedInput(action, text, extra) {
   if (extra.path) throw new Error('protected final clickAt must not carry an asynchronous path');
   const element = document.elementFromPoint(extra.x, extra.y);
   state.clicks.push({ id: element?.id || '', action, x: extra.x, y: extra.y });
-  if (state.clickOK && state.onClick) await state.onClick(element);
+  if (state.clickOK && state.clickDelivered) {
+    const other = document.querySelector('#chat-input').getBoundingClientRect();
+    await window.__sendNativeClick(state.clickWrongTarget ? other.left + 12 : extra.x,
+      state.clickWrongTarget ? other.top + 12 : extra.y);
+    if (!state.clickWrongTarget && state.onClick) await state.onClick(element);
+  }
   return { ok: state.clickOK };
 }
 async function trustedHoverElement() { return true; }
@@ -358,6 +364,20 @@ test('trusted click false never reports success or retries', async () => {
   const result = await h.send(ctx, h.greeting, before);
   h.equal(result.ok, false, 'failed trusted click'); h.equal(h.state.clicks.length, 1, 'no fallback or retry');
 });
+test('IPC dispatch success without a native button click fails without retry', async () => {
+  const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft(); h.state.clickDelivered = false;
+  const result = await h.send(ctx, h.greeting, before);
+  h.equal(result.ok, false, 'dispatch is not a click receipt'); h.equal(h.state.clicks.length, 1, 'one dispatch, no retry');
+  const logs = h.state.notifications.filter(entry => entry.data.stage === 'log').map(entry => entry.data.message).join('|');
+  h.assert(logs.includes('输入事件派发=通过') && logs.includes('按钮原生点击回执=失败'), 'message retains both receipt stages');
+  h.assert(logs.includes('文字发送停止') && !logs.includes(h.greeting), 'failure survives without task and contains no greeting');
+});
+test('native click on another element is rejected despite successful IPC dispatch', async () => {
+  const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft(); h.state.clickWrongTarget = true;
+  const result = await h.send(ctx, h.greeting, before);
+  h.equal(result.ok, false, 'wrong native click target'); h.equal(h.state.clicks.length, 1, 'no retry');
+  h.assert(h.state.notifications.some(entry => entry.data.message?.includes('按钮原生点击回执=失败')), 'wrong-target receipt failure retained');
+});
 test('recipient change immediately before trusted click is rejected by final guard', async () => {
   const h = window.h, ctx = h.context(), before = h.baseline(ctx); h.draft();
   h.state.beforeClick = () => { ctx.header.textContent = '不同 HR 不同岗位'; };
@@ -499,6 +519,7 @@ try {
   for (const { name, fn } of cases) {
     const context = await browser.newContext({ viewport: { width: 1200, height: 1000 }, serviceWorkers: 'block' });
     const page = await context.newPage();
+    await page.exposeFunction('__sendNativeClick', (x, y) => page.mouse.click(x, y));
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await context.route('**/*', route => {

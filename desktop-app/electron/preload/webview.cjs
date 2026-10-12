@@ -19,7 +19,7 @@
 // 不绕过平台安全措施。code 36/32/35/37/38 统一映射风控码，由上层（Workbench + safety.ts）处理。
 'use strict';
 
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, webFrame } = require('electron');
 // 多平台 DOM 适配表（webview 侧唯一权威：列表选择器 / 链接形态 / 页面形态判定）。
 // 纯数据 + 纯函数、零 DOM 依赖 → 可直接单测（见 desktop-app/tmp/probe-webview-platforms.cjs）。
 const ADAPTERS = require('./platform-adapters.cjs');
@@ -1157,7 +1157,11 @@ function confirmOwnMessage(greeting, context, before) {
 }
 
 async function sendChatMessage(context, greeting, before) {
-  const fail = (reason, clicked = false, sent = clicked ? null : false) => ({ ok: false, reason, clicked, sent });
+  const fail = (reason, clicked = false, sent = clicked ? null : false) => {
+    // 直接触发发送时可能没有活跃队列任务；log 阶段仍会保留这条脱敏终态。
+    notify('apply-stage', { stage: 'log', message: `文字发送停止：${reason}`, sent });
+    return { ok: false, reason, clicked, sent };
+  };
   const expected = normalizeChatText(greeting);
   if (!expected || !before || !currentChatSendInput(context)) return fail('聊天面板或会话已变化');
   if (before.entries.some(entry => entry.text === expected)) return fail('历史消息已包含相同文字，请人工核对避免重复发送');
@@ -1178,8 +1182,11 @@ async function sendChatMessage(context, greeting, before) {
       && sendButton(input, { context }) === btn && !ownMessageEntries(context).some(entry => entry.text === expected));
   };
   // 不走 humanClickElement 的去重/合成兜底：仅一次可信文字发送，失败后不能再回车或重发。
-  const clicked = await trustedClickElement(btn, { guard });
-  notify('apply-stage', { stage: 'log', message: '文字发送可信点击回执', trustedClick: clicked, sent: null });
+  const clicked = await trustedClickElement(btn, { guard, report: (step, ok) => {
+    // Workbench 只持久化 message；不能把回执状态只放在会被丢弃的元数据中。
+    notify('apply-stage', { stage: 'log', message: `文字发送点击检查：${step}=${ok ? '通过' : '失败'}`, sent: null });
+  } });
+  notify('apply-stage', { stage: 'log', message: `文字发送可信点击回执：${clicked ? '成功' : '失败'}`, trustedClick: clicked, sent: null });
   if (!clicked) return fail('文字发送可信点击失败，已停止；请人工核对消息状态', false, null);
   notify('apply-stage', { stage: 'verify_message', label: '确认新增完整己方文字气泡', sent: null });
   const confirmed = await waitFor(() => confirmOwnMessage(greeting, context, before), 8000, '新增完整文字气泡确认');
@@ -1209,11 +1216,31 @@ function elementCenter(el) {
   } catch { return null; }
 }
 
+function observeTrustedClick(el) {
+  let finish;
+  let timer;
+  const receipt = new Promise(resolve => { finish = resolve; });
+  const done = (ok) => {
+    clearTimeout(timer);
+    document.removeEventListener('click', onClick, true);
+    finish(ok);
+  };
+  const onClick = (event) => {
+    // 派发 IPC 成功并不等于按钮收到点击。只接受此按钮/其子节点的原生 click。
+    if (!event.isTrusted) return;
+    done(Boolean(el.isConnected && (event.target === el || el.contains(event.target))));
+  };
+  document.addEventListener('click', onClick, true);
+  timer = setTimeout(() => done(false), 1200);
+  return { receipt, cancel: () => done(false) };
+}
+
 async function trustedClickElement(el, opts = {}) {
   if (!el) return false;
   try { el.scrollIntoView?.({ block: 'center', behavior: 'instant' }); } catch {}
   await jitterDelay(200);
   const to = elementCenter(el);
+  opts.report?.('按钮坐标', Boolean(to));
   if (!to) return false;
   const from = lastCursor || { x: Math.max(0, to.x - 70 - Math.round(Math.random() * 40)), y: Math.max(0, to.y - 50 - Math.round(Math.random() * 30)) };
   const path = humanize.buildMousePath(from, to);
@@ -1223,16 +1250,27 @@ async function trustedClickElement(el, opts = {}) {
     // 受保护的文字发送先完成轨迹，再复核。最终 clickAt 不带异步轨迹，
     // 防止检查后等待鼠标移动期间切换会话，或等待前的坐标变成其他控件。
     const hovered = await trustedInput('hoverAt', '', { path });
-    if (!hovered?.ok || !opts.guard()) return false;
+    opts.report?.('悬停回执', Boolean(hovered?.ok));
+    if (!hovered?.ok) return false;
+    const guarded = Boolean(opts.guard());
+    opts.report?.('会话与草稿守卫', guarded);
+    if (!guarded) return false;
     const current = elementCenter(el);
     const hit = current && document.elementFromPoint(current.x, current.y);
-    if (!current || !(hit === el || el.contains(hit))) return false;
+    const hitTarget = Boolean(current && (hit === el || el.contains(hit)));
+    opts.report?.('按钮命中', hitTarget);
+    if (!hitTarget) return false;
     click = { x: current.x, y: current.y };
   }
+  const observed = opts.guard ? observeTrustedClick(el) : null;
   const r = await trustedInput('clickAt', '', click);
-  if (r && r.ok) lastCursor = { x: click.x, y: click.y };
+  opts.report?.('输入事件派发', Boolean(r?.ok));
+  if (!r?.ok) observed?.cancel();
+  const received = observed ? await observed.receipt : Boolean(r?.ok);
+  if (observed) opts.report?.('按钮原生点击回执', received);
+  if (r?.ok && received) lastCursor = { x: click.x, y: click.y };
   await jitterDelay(opts.afterMs || 160);
-  return Boolean(r && r.ok);
+  return Boolean(r?.ok && received);
 }
 
 // 纯悬停：只移动光标到元素（可带轨迹），不按键。用于「输入前先把鼠标移过去」。
@@ -2482,6 +2520,22 @@ async function visualCollect(opts = {}) {
 // 输出当前页面：元素统计 / 列表容器候选 / li·a 样本 / 详情面板 / 「查看更多信息」按钮候选，
 // 供上层（Workbench 日志区）复制给开发者对齐新版选择器。
 function domDump() {
+  // 聊天诊断只报告布尔值/计数/缩放，不输出收件人、消息正文或账号信息。
+  // 此检查不聚焦、不输入、不点击，便于真实页面验收前定位发送前置条件。
+  try {
+    const input = chatInput();
+    const context = input && createChatSendContext(input);
+    const button = context && sendButton(input, { context, allowDisabled: true });
+    const center = button && elementCenter(button);
+    const hit = center && document.elementFromPoint(center.x, center.y);
+    notify('apply-stage', { stage: 'log', message: '文字发送只读检查：' + JSON.stringify({
+      input: Boolean(input), panel: Boolean(context), session: Boolean(context && currentChatSendInput(context)),
+      button: Boolean(button), enabled: Boolean(button && !isDisabledish(button)),
+      hit: Boolean(button && hit && (hit === button || button.contains(hit))),
+      zoom: webFrame.getZoomFactor(), focus: document.hasFocus(),
+      ownMessages: context ? ownMessageEntries(context).length : 0,
+    }) });
+  } catch { notify('apply-stage', { stage: 'log', message: '文字发送只读检查失败（未执行任何输入或点击）' }); }
   const clamp = (v, n) => String(v || '').slice(0, n);
   const out = {
     time: Date.now(),
