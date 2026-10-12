@@ -56,6 +56,12 @@ jobs:
           npx --no-install playwright-core install chromium
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Install locked Electron runtime for native regression
+        run: |
+          # Electron 42 requires explicit installation; npm ci installs the JS package only.
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified Windows icon tool
         run: |
           $iconTool = Join-Path $env:RUNNER_TEMP 'rcedit-x64.exe'

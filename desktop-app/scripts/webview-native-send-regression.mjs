@@ -1,5 +1,6 @@
 // Actual Electron <webview> IPC/input regressions. Windows only, fully offline.
-// npm ci must install Electron; a missing runtime is a failure, never a skip.
+// Install the locked runtime with node node_modules/electron/install.js after npm ci;
+// a missing runtime is a failure, never a skip.
 // BOSSCLAW_TEST_ELECTRON may point at an existing Electron/BossClaw runtime EXE.
 // Only runtime root files/locales are copied; installed resources/app/userData are never used.
 import assert from 'node:assert/strict';
@@ -79,7 +80,7 @@ async function electronPath() {
   const packageDirectory = dirname(require.resolve('electron/package.json'));
   let binary;
   try { binary = (await readFile(join(packageDirectory, 'path.txt'), 'utf8')).trim(); }
-  catch { throw new Error('Electron runtime missing: run npm ci with Electron installation enabled, or set BOSSCLAW_TEST_ELECTRON'); }
+  catch { throw new Error('Electron runtime missing: run node node_modules/electron/install.js after npm ci, or set BOSSCLAW_TEST_ELECTRON'); }
   return join(packageDirectory, 'dist', binary);
 }
 
